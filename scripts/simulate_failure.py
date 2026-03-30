@@ -20,6 +20,20 @@ BACKUP_FILE = os.path.join(RAW_DATA_DIR, "yellow_tripdata_2024_01.parquet.bak")
 TARGET_DIR = os.path.join(PROJECT_ROOT, "dataiq", "target")
 
 
+def write_active_scenario(name: str, description: str):
+    """Write active_scenario.json so run_pipeline.py knows which scenario is active."""
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    marker_path = os.path.join(PROCESSED_DIR, "active_scenario.json")
+    data = {
+        "scenario": name,
+        "applied_at": datetime.now().isoformat(),
+        "description": description,
+    }
+    with open(marker_path, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"Wrote active scenario marker: {name}")
+
+
 def backup_source():
     """Backup original parquet if not already backed up."""
     if not os.path.exists(BACKUP_FILE):
@@ -49,6 +63,11 @@ def scenario_reset():
         os.remove(override)
         print("Removed performance override")
 
+    active = os.path.join(PROCESSED_DIR, "active_scenario.json")
+    if os.path.exists(active):
+        os.remove(active)
+        print("Removed active scenario marker")
+
     print("Reset complete — all scenarios cleared.")
 
 
@@ -66,6 +85,7 @@ def scenario_schema_change():
     df.to_parquet(SOURCE_FILE, index=False)
     print(f"Schema change applied: renamed fare_amount -> fare")
     print(f"This will cause stg_taxi_trips to fail on missing fare_amount column.")
+    write_active_scenario("schema_change", "fare_amount renamed to fare")
 
 
 def scenario_data_freshness():
@@ -85,6 +105,7 @@ def scenario_data_freshness():
 
     print(f"Freshness issue created: last_run set to {stale_date}")
     print("DataIQ agents will detect the pipeline hasn't run recently.")
+    write_active_scenario("data_freshness", f"last_run set to {stale_date}")
 
 
 def scenario_quality_drift():
@@ -105,6 +126,7 @@ def scenario_quality_drift():
     null_pct = df["fare_amount"].isna().mean() * 100
     print(f"Quality drift applied: {null_pct:.1f}% of fare_amount set to null ({n_nulls:,} rows)")
     print("This will cause data quality test failures.")
+    write_active_scenario("quality_drift", f"{null_pct:.1f}% of fare_amount set to null")
 
 
 def scenario_performance_degradation():
@@ -129,6 +151,7 @@ def scenario_performance_degradation():
 
     print(f"Performance degradation applied: execution times 10x'd")
     print(f"Override saved to {override_path}")
+    write_active_scenario("performance_degradation", "execution times multiplied by 10x")
 
 
 SCENARIOS = {

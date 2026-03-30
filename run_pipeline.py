@@ -76,6 +76,13 @@ def detect_scenario() -> str:
     """Detect which failure scenario is active."""
     project_root = os.path.dirname(os.path.abspath(__file__))
 
+    # Check for active scenario marker (written by simulate_failure.py)
+    active_path = os.path.join(project_root, "data", "processed", "active_scenario.json")
+    if os.path.exists(active_path):
+        with open(active_path) as f:
+            data = json.load(f)
+        return data.get("scenario", "none")
+
     # Check for freshness marker
     freshness_path = os.path.join(project_root, "data", "processed", "last_run.json")
     if os.path.exists(freshness_path):
