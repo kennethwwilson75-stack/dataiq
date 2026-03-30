@@ -1,0 +1,9 @@
+venv/
+*.duckdb
+*.duckdb.wal
+dataiq/target/
+dataiq/logs/
+__pycache__/
+*.pyc
+.env
+data/raw/
