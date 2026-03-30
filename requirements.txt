@@ -5,3 +5,5 @@ langchain-anthropic
 pydantic
 pandas
 python-dotenv
+streamlit
+duckdb
