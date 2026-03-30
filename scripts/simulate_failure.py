@@ -109,7 +109,7 @@ def scenario_data_freshness():
 
 
 def scenario_quality_drift():
-    """Scenario 3: Set 34% of fare_amount values to null."""
+    """Scenario 3: Set 34% of fare_amount values to extreme outlier 9999.99."""
     backup_source()
 
     conn = duckdb.connect()
@@ -118,15 +118,15 @@ def scenario_quality_drift():
     """).fetchdf()
     conn.close()
 
-    n_nulls = int(len(df) * 0.34)
-    null_indices = df.sample(n=n_nulls, random_state=42).index
-    df.loc[null_indices, "fare_amount"] = None
+    n_outliers = int(len(df) * 0.34)
+    outlier_indices = df.sample(n=n_outliers, random_state=42).index
+    df.loc[outlier_indices, "fare_amount"] = 9999.99
 
     df.to_parquet(SOURCE_FILE, index=False)
-    null_pct = df["fare_amount"].isna().mean() * 100
-    print(f"Quality drift applied: {null_pct:.1f}% of fare_amount set to null ({n_nulls:,} rows)")
-    print("This will cause data quality test failures.")
-    write_active_scenario("quality_drift", f"{null_pct:.1f}% of fare_amount set to null")
+    outlier_pct = (df["fare_amount"] == 9999.99).mean() * 100
+    print(f"Quality drift applied: {outlier_pct:.1f}% of fare_amount set to 9999.99 ({n_outliers:,} rows)")
+    print("These outliers pass WHERE fare_amount > 0 but fail accepted_range max=500.")
+    write_active_scenario("quality_drift", f"{outlier_pct:.1f}% of fare_amount set to 9999.99")
 
 
 def scenario_performance_degradation():
@@ -175,7 +175,7 @@ def main():
         print("  0 / reset                  - Restore everything to normal")
         print("  1 / schema_change          - Rename fare_amount to fare")
         print("  2 / data_freshness         - Create stale run marker")
-        print("  3 / quality_drift          - Set 34% of fares to null")
+        print("  3 / quality_drift          - Set 34% of fares to 9999.99")
         print("  4 / performance_degradation - 10x execution times")
         sys.exit(1)
 

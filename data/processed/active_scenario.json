@@ -1,5 +1,0 @@
-{
-  "scenario": "schema_change",
-  "applied_at": "2026-03-30T12:25:27.199609",
-  "description": "fare_amount renamed to fare"
-}

@@ -31,7 +31,7 @@ models:
                 min_value: 0
                 max_value: 500
               config:
-                severity: warn
+                severity: error
       - name: passenger_count
         description: Number of passengers
         tests:
