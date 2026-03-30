@@ -1,0 +1,19 @@
+version: 2
+
+models:
+  - name: daily_trip_metrics
+    description: Daily aggregated trip metrics
+    columns:
+      - name: trip_date
+        description: Date of trips
+        tests:
+          - not_null
+          - unique
+      - name: trip_count
+        description: Number of trips that day
+        tests:
+          - not_null
+      - name: total_revenue
+        description: Total revenue for the day
+        tests:
+          - not_null

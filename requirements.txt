@@ -1,0 +1,7 @@
+anthropic
+dbt-duckdb
+langgraph
+langchain-anthropic
+pydantic
+pandas
+python-dotenv
