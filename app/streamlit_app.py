@@ -299,13 +299,33 @@ def _status_icon(status: str) -> str:
     return icons.get(status, "❓")
 
 
+def _load_demo_results() -> dict | None:
+    """Load pre-computed demo results from data/demo_results.json."""
+    demo_path = os.path.join(PROJECT_ROOT, "data", "demo_results.json")
+    if os.path.exists(demo_path):
+        with open(demo_path) as f:
+            return json.load(f)
+    return None
+
+
 def _build_demo_state() -> dict:
-    """Build a demo state from existing dbt artifacts without running agents.
+    """Build a demo state from pre-computed JSON or existing dbt artifacts.
 
     Always presents a compelling quality-drift failure scenario so the demo
     is interesting even when no live scenario has been activated.
     """
+    # Try pre-computed demo results first (works on Streamlit Cloud)
+    demo = _load_demo_results()
     artifacts = _load_artifacts()
+
+    # Use pre-computed results when dbt artifacts are empty
+    has_artifacts = bool(artifacts["model_results"] or artifacts["test_results"])
+
+    if demo and not has_artifacts:
+        st.session_state.active_scenario = demo.get("scenario", "quality_drift")
+        return demo
+
+    # Fall back to building from dbt artifacts
     scenario = _detect_scenario()
 
     model_results = artifacts["model_results"]
@@ -359,6 +379,12 @@ def _build_demo_state() -> dict:
     # Downstream models that were skipped due to failures
     skipped_model_names = [m["unique_id"] for m in model_results if m["status"] == "skipped"]
 
+    # Use pre-computed interpretations from demo JSON if available
+    demo_pm = demo.get("pipeline_monitor", {}) if demo else {}
+    demo_dq = demo.get("data_quality", {}) if demo else {}
+    demo_rc = demo.get("root_cause", {}) if demo else {}
+    demo_ia = demo.get("impact_analysis", {}) if demo else {}
+
     # Build a state dict matching DataIQState structure
     state = {
         "run_metadata": artifacts["run_metadata"],
@@ -377,7 +403,7 @@ def _build_demo_state() -> dict:
             "total_execution_time": total_exec,
             "summary": f"CRITICAL: Pipeline is {pm_status}. {len(failed_models)} failed/skipped models, "
                        f"{failed_tests} test failures, {warned} warnings.",
-            "claude_interpretation": "(Demo mode — agent interpretation not available)",
+            "claude_interpretation": demo_pm.get("claude_interpretation", "(Demo mode — agent interpretation not available)"),
         },
         "data_quality": {
             "status": dq_status,
@@ -387,7 +413,7 @@ def _build_demo_state() -> dict:
             "failure_details": failure_details,
             "column_issues": [],
             "summary": f"{passed}/{total_tests} tests passing. {failed_tests} failures, {warned} warnings.",
-            "claude_interpretation": "(Demo mode — agent interpretation not available)",
+            "claude_interpretation": demo_dq.get("claude_interpretation", "(Demo mode — agent interpretation not available)"),
         },
         "root_cause": {
             "root_cause_type": scenario,
@@ -400,7 +426,7 @@ def _build_demo_state() -> dict:
                 ) if skipped_model_names else "Test failures detected in staging layer",
             ],
             "summary": f"Root cause: {scenario.replace('_', ' ')} detected in stg_taxi_trips.",
-            "claude_interpretation": "(Demo mode — agent interpretation not available)",
+            "claude_interpretation": demo_rc.get("claude_interpretation", "(Demo mode — agent interpretation not available)"),
         },
         "impact_analysis": {
             "affected_models": skipped_model_names,
@@ -413,7 +439,7 @@ def _build_demo_state() -> dict:
                 "Revenue reports may be inaccurate until fare_amount anomalies are resolved",
             ] if skipped_model_names else [],
             "summary": f"{len(skipped_model_names)} downstream models affected by upstream failures.",
-            "claude_interpretation": "(Demo mode — agent interpretation not available)",
+            "claude_interpretation": demo_ia.get("claude_interpretation", "(Demo mode — agent interpretation not available)"),
         },
         "report": {
             "data_engineer_brief": "(Demo mode — run full pipeline for AI-generated reports)",
@@ -548,8 +574,8 @@ def page_pipeline_monitor():
 
     # Claude interpretation
     interp = _get_field(pm, "claude_interpretation", "")
-    if interp and not interp.startswith("(Demo"):
-        with st.expander("AI Interpretation", expanded=False):
+    if interp and interp != "(Demo mode — agent interpretation not available)":
+        with st.expander("AI Interpretation", expanded=True):
             st.markdown(interp)
 
 
@@ -633,7 +659,7 @@ def page_data_quality():
                 st.markdown(f"{icon} **{test_name}** — {fd.get('message', 'No details')} ({fd.get('failures', 0)} rows)")
 
         interp = _get_field(dq, "claude_interpretation", "")
-        if interp and not interp.startswith("(Demo"):
+        if interp and interp != "(Demo mode — agent interpretation not available)":
             with st.expander("AI Quality Assessment", expanded=False):
                 st.markdown(interp)
 
@@ -681,7 +707,7 @@ def page_impact_analysis():
             st.code("\n".join(tree_lines), language=None)
 
         interp = _get_field(rc, "claude_interpretation", "")
-        if interp and not interp.startswith("(Demo"):
+        if interp and interp != "(Demo mode — agent interpretation not available)":
             with st.expander("AI Root Cause Analysis", expanded=False):
                 st.markdown(interp)
 
@@ -711,7 +737,7 @@ def page_impact_analysis():
                 st.markdown(f"📧 {s}")
 
         interp = _get_field(ia, "claude_interpretation", "")
-        if interp and not interp.startswith("(Demo"):
+        if interp and interp != "(Demo mode — agent interpretation not available)":
             with st.expander("AI Impact Assessment", expanded=False):
                 st.markdown(interp)
 
@@ -719,6 +745,78 @@ def page_impact_analysis():
 # ═══════════════════════════════════════════════════════════════════════════
 # PAGE: Executive Report
 # ═══════════════════════════════════════════════════════════════════════════
+def _generate_demo_reports(state: dict) -> dict:
+    """Generate executive reports via Claude API using demo scenario context."""
+    try:
+        from anthropic import Anthropic
+        client = Anthropic()
+    except Exception:
+        return None
+
+    pm = _get_sub(state, "pipeline_monitor")
+    dq = _get_sub(state, "data_quality")
+    rc = _get_sub(state, "root_cause")
+    ia = _get_sub(state, "impact_analysis")
+
+    context = (
+        "Pipeline analysis for a quality drift scenario:\n"
+        f"- Pipeline status: {_get_field(pm, 'status', 'degraded')}\n"
+        f"- 6 models total, 0 failed, 2 slow (raw_taxi_trips at 4.21s / 3.9x baseline, stg_taxi_trips at 2.13s / 2.0x baseline)\n"
+        f"- 9 tests total, 1 failed: accepted_range_stg_taxi_trips_fare_amount (937,062 rows outside $0-$500 range)\n"
+        f"- Root cause: quality drift in fare_amount column at staging layer — entire dataset affected\n"
+        f"- 3 downstream models affected: daily_trip_metrics, hourly_demand, payment_summary\n"
+        f"- Business impact: revenue dashboards inflated, demand forecasts unreliable, finance reconciliation will fail\n"
+    )
+
+    prompts = {
+        "data_engineer_brief": (
+            "You are writing a technical brief for a data engineer. "
+            "Here is the full pipeline analysis:\n\n" + context +
+            "\nWrite a DATA ENGINEER BRIEF that is:\n"
+            "- Technical and specific\n"
+            "- Includes exact model names, test names, error messages\n"
+            "- Provides step-by-step fix instructions\n"
+            "- Mentions SQL/dbt commands to run\n"
+            "- Includes estimated fix time\n\n"
+            "Format with clear sections: Status, Root Cause, Affected Models, Fix Steps, Prevention."
+        ),
+        "analytics_manager_summary": (
+            "You are writing a summary for an analytics manager. "
+            "Here is the full pipeline analysis:\n\n" + context +
+            "\nWrite an ANALYTICS MANAGER SUMMARY that is:\n"
+            "- In plain terms, avoiding deep technical jargon\n"
+            "- Explains which reports and dashboards are affected\n"
+            "- Provides a realistic ETA for resolution\n"
+            "- Suggests interim workarounds\n\n"
+            "Format with clear sections: What Happened, What's Affected, Timeline, Next Steps."
+        ),
+        "business_stakeholder_note": (
+            "You are writing a note for a business stakeholder (VP/C-level). "
+            "Here is the full pipeline analysis:\n\n" + context +
+            "\nWrite a BUSINESS STAKEHOLDER NOTE that is:\n"
+            "- Zero technical jargon\n"
+            "- Focuses on business impact only\n"
+            "- Provides clear action items and timeline\n"
+            "- Is concise (under 200 words)\n\n"
+            "Format as a brief executive memo."
+        ),
+    }
+
+    reports = {}
+    for key, prompt in prompts.items():
+        try:
+            max_tokens = {"data_engineer_brief": 1500, "analytics_manager_summary": 1000, "business_stakeholder_note": 800}
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=max_tokens[key],
+                messages=[{"role": "user", "content": prompt}],
+            )
+            reports[key] = response.content[0].text
+        except Exception as e:
+            reports[key] = f"(Report generation failed: {e})"
+    return reports
+
+
 def page_executive_report():
     st.title("Executive Report")
     st.caption("AI-generated briefings for every audience")
@@ -746,29 +844,52 @@ def page_executive_report():
         st.warning("No report available. Run the full pipeline first.")
         return
 
+    # Check if reports need generation (demo mode with empty reports)
+    brief = _get_field(report, "data_engineer_brief", "")
+    is_placeholder = not brief or brief.startswith("(Demo mode")
+
+    if is_placeholder:
+        if st.button("Generate AI Reports", type="primary", use_container_width=True,
+                      help="Call Claude API to generate audience-specific reports for this demo scenario"):
+            with st.spinner("Generating executive reports with Claude..."):
+                generated = _generate_demo_reports(state)
+                if generated:
+                    if isinstance(state, dict):
+                        state["report"] = generated
+                    else:
+                        state.report = generated
+                    st.session_state.pipeline_state = state
+                    st.rerun()
+                else:
+                    st.error("Could not generate reports — check that ANTHROPIC_API_KEY is set.")
+                    return
+
+    # Re-read report after potential generation
+    report = _get_sub(state, "report")
+
     # Three audience tabs
     tab_eng, tab_mgr, tab_exec = st.tabs(["Data Engineer Brief", "Analytics Manager", "Business Stakeholder"])
 
     with tab_eng:
         brief = _get_field(report, "data_engineer_brief", "")
-        if brief:
+        if brief and not brief.startswith("(Demo mode"):
             st.markdown(brief)
         else:
-            st.caption("No engineer brief generated.")
+            st.caption("Click **Generate AI Reports** above to create the engineer brief.")
 
     with tab_mgr:
         summary = _get_field(report, "analytics_manager_summary", "")
-        if summary:
+        if summary and not summary.startswith("(Demo mode"):
             st.markdown(summary)
         else:
-            st.caption("No manager summary generated.")
+            st.caption("Click **Generate AI Reports** above to create the manager summary.")
 
     with tab_exec:
         note = _get_field(report, "business_stakeholder_note", "")
-        if note:
+        if note and not note.startswith("(Demo mode"):
             st.markdown(note)
         else:
-            st.caption("No stakeholder note generated.")
+            st.caption("Click **Generate AI Reports** above to create the stakeholder note.")
 
     # Download button
     if report:

@@ -1,0 +1,192 @@
+{
+  "run_metadata": {
+    "elapsed_time": 14.7,
+    "generated_at": "2026-03-30T09:15:42Z"
+  },
+  "scenario": "quality_drift",
+  "model_results": [
+    {
+      "unique_id": "model.dataiq.raw_taxi_trips",
+      "status": "success",
+      "execution_time": 4.21,
+      "message": "OK — 937062 rows ingested (3.9x baseline)",
+      "failures": null
+    },
+    {
+      "unique_id": "model.dataiq.stg_taxi_trips",
+      "status": "success",
+      "execution_time": 2.13,
+      "message": "OK — staging transform complete (2.0x baseline)",
+      "failures": null
+    },
+    {
+      "unique_id": "model.dataiq.daily_trip_metrics",
+      "status": "success",
+      "execution_time": 0.82,
+      "message": "OK",
+      "failures": null
+    },
+    {
+      "unique_id": "model.dataiq.hourly_demand",
+      "status": "success",
+      "execution_time": 0.64,
+      "message": "OK",
+      "failures": null
+    },
+    {
+      "unique_id": "model.dataiq.payment_summary",
+      "status": "success",
+      "execution_time": 0.51,
+      "message": "OK",
+      "failures": null
+    },
+    {
+      "unique_id": "model.dataiq.trip_duration_stats",
+      "status": "success",
+      "execution_time": 0.47,
+      "message": "OK",
+      "failures": null
+    }
+  ],
+  "test_results": [
+    {
+      "unique_id": "test.dataiq.not_null_stg_taxi_trips_trip_id",
+      "status": "pass",
+      "execution_time": 0.12,
+      "message": "Pass",
+      "failures": 0
+    },
+    {
+      "unique_id": "test.dataiq.not_null_stg_taxi_trips_fare_amount",
+      "status": "pass",
+      "execution_time": 0.09,
+      "message": "Pass",
+      "failures": 0
+    },
+    {
+      "unique_id": "test.dataiq.unique_stg_taxi_trips_trip_id",
+      "status": "pass",
+      "execution_time": 0.15,
+      "message": "Pass",
+      "failures": 0
+    },
+    {
+      "unique_id": "test.dataiq.positive_stg_taxi_trips_fare_amount",
+      "status": "pass",
+      "execution_time": 0.08,
+      "message": "Pass",
+      "failures": 0
+    },
+    {
+      "unique_id": "test.dataiq.accepted_range_stg_taxi_trips_fare_amount",
+      "status": "fail",
+      "execution_time": 0.21,
+      "message": "Got 937062 results, configured to fail if != 0 — fare_amount values outside accepted range [0, 500]",
+      "failures": 937062
+    },
+    {
+      "unique_id": "test.dataiq.not_null_daily_trip_metrics_trip_date",
+      "status": "pass",
+      "execution_time": 0.06,
+      "message": "Pass",
+      "failures": 0
+    },
+    {
+      "unique_id": "test.dataiq.not_null_hourly_demand_hour",
+      "status": "pass",
+      "execution_time": 0.05,
+      "message": "Pass",
+      "failures": 0
+    },
+    {
+      "unique_id": "test.dataiq.positive_daily_trip_metrics_total_revenue",
+      "status": "pass",
+      "execution_time": 0.07,
+      "message": "Pass",
+      "failures": 0
+    },
+    {
+      "unique_id": "test.dataiq.unique_payment_summary_payment_type",
+      "status": "pass",
+      "execution_time": 0.04,
+      "message": "Pass",
+      "failures": 0
+    }
+  ],
+  "pipeline_monitor": {
+    "status": "degraded",
+    "failed_models": [],
+    "slow_models": [
+      "model.dataiq.raw_taxi_trips",
+      "model.dataiq.stg_taxi_trips"
+    ],
+    "missing_runs": false,
+    "total_models": 6,
+    "total_execution_time": 8.78,
+    "summary": "Pipeline DEGRADED: 0 failed models, 2 slow models, 1 test failure (fare_amount range violation on 937,062 rows). Quality drift detected in staging layer.",
+    "claude_interpretation": "### Pipeline Health Assessment\n\n**Status: DEGRADED** — Quality drift detected in the taxi trip data pipeline.\n\n#### What's happening\nThe pipeline completed all 6 models successfully, but two critical issues surfaced:\n\n1. **Data quality violation**: The `accepted_range` test on `stg_taxi_trips.fare_amount` failed with **937,062 rows** outside the expected range of $0–$500. This is not a partial failure — it affects the entire dataset, suggesting a systemic issue with the upstream data source rather than a few bad records.\n\n2. **Performance degradation**: The ingestion and staging layers are running significantly slower than baseline:\n   - `raw_taxi_trips`: 4.21s (3.9× baseline) \n   - `stg_taxi_trips`: 2.13s (2.0× baseline)\n   \n   The slowdown correlates with the data quality issue — the enlarged or corrupted dataset is taking longer to process.\n\n#### Why this matters\nThe fare_amount anomaly has propagated through the pipeline into all three downstream mart models (`daily_trip_metrics`, `hourly_demand`, `payment_summary`). While these models built successfully, they are now computing aggregations on corrupted fare data. **Revenue dashboards and demand forecasts are unreliable until this is resolved.**\n\n#### Recommended actions\n1. Inspect the raw source data for fare_amount distribution changes — look for a schema change or ETL bug upstream\n2. Consider adding a `dbt run --select stg_taxi_trips+` after fixing the source to rebuild affected marts\n3. Notify the analytics team that revenue-related reports should not be used until the data is validated"
+  },
+  "data_quality": {
+    "status": "failing",
+    "total_tests": 9,
+    "passed_tests": 8,
+    "failed_tests": 1,
+    "failure_details": [
+      {
+        "test": "test.dataiq.accepted_range_stg_taxi_trips_fare_amount",
+        "status": "fail",
+        "message": "Got 937062 results, configured to fail if != 0 — fare_amount values outside accepted range [0, 500]",
+        "failures": 937062
+      }
+    ],
+    "column_issues": ["fare_amount"],
+    "summary": "8/9 tests passing. 1 critical failure: fare_amount range violation affecting 937,062 rows.",
+    "claude_interpretation": "### Data Quality Analysis\n\n**Quality Score: 89%** (8 of 9 tests passing)\n\nWhile the overall pass rate looks high, the single failure is severe.\n\n#### Critical Failure: `accepted_range_stg_taxi_trips_fare_amount`\n- **937,062 rows** have `fare_amount` values outside the accepted range of $0–$500\n- This represents the **entire dataset**, not a small subset of outliers\n- All null checks and uniqueness tests pass, so the data structure is intact — the values themselves have drifted\n\n#### Pattern Analysis\nThis is characteristic of **quality drift** rather than a schema break:\n- The column exists and is populated (not_null passes)\n- Values are positive (positive test passes)\n- But the magnitude has shifted dramatically beyond the $500 ceiling\n\n#### Likely root causes (in order of probability)\n1. **Upstream ETL change** — a unit conversion (cents → dollars) was removed or a currency field was swapped\n2. **Source system update** — the taxi data provider changed their fare calculation or added surge pricing without capping\n3. **Data type overflow** — integer-to-float conversion introducing precision artifacts\n\nThe downstream mart models have already consumed this data. Revenue aggregations in `daily_trip_metrics` and `payment_summary` will be inflated."
+  },
+  "root_cause": {
+    "root_cause_type": "quality_drift",
+    "root_cause_model": "model.dataiq.stg_taxi_trips",
+    "dependency_chain": [
+      "model.dataiq.raw_taxi_trips",
+      "model.dataiq.stg_taxi_trips",
+      "model.dataiq.daily_trip_metrics"
+    ],
+    "evidence": [
+      "Test `accepted_range_stg_taxi_trips_fare_amount` failed with 937,062 rows outside range $0–$500",
+      "fare_amount values show systemic drift — entire dataset affected, not isolated outliers",
+      "Upstream models raw_taxi_trips and stg_taxi_trips running 2–4× slower than baseline",
+      "Downstream marts (daily_trip_metrics, hourly_demand, payment_summary) built on corrupted fare data"
+    ],
+    "summary": "Root cause: quality drift in fare_amount column at the staging layer. Source data contains values outside the $0–$500 accepted range across all 937,062 rows.",
+    "claude_interpretation": "### Root Cause Analysis\n\n**Diagnosis: Quality Drift in `stg_taxi_trips.fare_amount`**\n\nThe failure originates in the staging layer where fare_amount values have shifted outside the accepted $0–$500 range. This is a **data quality drift** scenario — the pipeline schema is intact, models build successfully, but the data values themselves are wrong.\n\n#### Dependency trace\n```\nraw_taxi_trips (source ingestion, 4.21s — 3.9× slow)\n  └── stg_taxi_trips (staging transform, 2.13s — 2.0× slow)\n       ├── daily_trip_metrics ← affected\n       ├── hourly_demand ← affected  \n       └── payment_summary ← affected\n```\n\n#### Evidence chain\n1. The `accepted_range` test is the only failure — all structural tests (not_null, unique, positive) pass\n2. The failure count (937,062) matches the total row count, meaning **every row** is affected\n3. Performance degradation in the ingestion and staging layers suggests the source data volume or shape changed\n\n#### This is NOT\n- ❌ A schema change (columns are intact)\n- ❌ A freshness issue (data arrived on time)\n- ❌ A performance-only issue (the slowdown is a symptom, not the cause)\n\n#### Fix path\nInvestigate the raw source data for fare_amount distribution. The fix is upstream — either the data provider changed their output or an ETL transformation was modified."
+  },
+  "impact_analysis": {
+    "affected_models": [
+      "model.dataiq.daily_trip_metrics",
+      "model.dataiq.hourly_demand",
+      "model.dataiq.payment_summary"
+    ],
+    "affected_count": 3,
+    "downstream_impacts": [
+      "daily_trip_metrics — daily revenue totals and averages are inflated due to corrupted fare_amount values",
+      "hourly_demand — demand forecasting model consuming incorrect fare data, predictions unreliable",
+      "payment_summary — payment type revenue breakdowns are skewed by out-of-range fares"
+    ],
+    "stakeholder_impacts": [
+      "Analytics team: Revenue dashboards showing inflated numbers — do not use for reporting until resolved",
+      "Operations team: Demand forecasts based on corrupted fare data may lead to incorrect driver allocation",
+      "Finance team: Daily revenue reconciliation will not match payment processor totals",
+      "Executive leadership: Weekly KPI report should carry a data quality caveat until fix is confirmed"
+    ],
+    "summary": "3 downstream models affected. All revenue-related reporting is unreliable until fare_amount quality drift is resolved.",
+    "claude_interpretation": "### Impact Assessment\n\n**Blast Radius: 3 downstream models, 4 stakeholder groups**\n\nThe fare_amount quality drift has a wide but well-defined blast radius. Every model downstream of `stg_taxi_trips` that touches fare or revenue data is affected.\n\n#### Downstream Model Impact\n\n| Model | Impact | Severity |\n|-------|--------|----------|\n| `daily_trip_metrics` | Revenue totals inflated | 🔴 Critical |\n| `hourly_demand` | Demand predictions unreliable | 🟡 High |\n| `payment_summary` | Payment breakdowns skewed | 🔴 Critical |\n\n#### Business Impact\n- **Revenue dashboards** are showing incorrect numbers and should be flagged or taken offline\n- **Demand forecasting** will over- or under-allocate drivers based on faulty fare signals\n- **Finance reconciliation** will fail to match payment processor totals\n- **Weekly KPI reports** need a data quality caveat\n\n#### Containment recommendation\n1. Add a data quality banner to affected dashboards immediately\n2. Pause any automated decisions based on fare/revenue data\n3. After source fix, run `dbt build --select stg_taxi_trips+` to rebuild the full downstream chain\n4. Validate mart outputs against a known-good snapshot before removing the quality banner"
+  },
+  "report": {
+    "data_engineer_brief": "",
+    "analytics_manager_summary": "",
+    "business_stakeholder_note": ""
+  },
+  "completed_agents": ["pipeline_monitor", "data_quality", "root_cause", "impact_analysis"],
+  "current_agent": "",
+  "errors": []
+}
