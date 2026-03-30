@@ -300,39 +300,51 @@ def _status_icon(status: str) -> str:
 
 
 def _build_demo_state() -> dict:
-    """Build a demo state from existing dbt artifacts without running agents."""
+    """Build a demo state from existing dbt artifacts without running agents.
+
+    Always presents a compelling quality-drift failure scenario so the demo
+    is interesting even when no live scenario has been activated.
+    """
     artifacts = _load_artifacts()
     scenario = _detect_scenario()
-    st.session_state.active_scenario = scenario
 
     model_results = artifacts["model_results"]
     test_results = artifacts["test_results"]
 
-    # Derive pipeline monitor output
-    failed_models = [m["unique_id"] for m in model_results if m["status"] == "error"]
-    slow_threshold = 2 * (sum(m["execution_time"] for m in model_results) / max(len(model_results), 1))
-    slow_models = [m["unique_id"] for m in model_results if m["execution_time"] > slow_threshold]
+    # Derive pipeline monitor output — count skipped models as impacted
+    failed_models = [m["unique_id"] for m in model_results if m["status"] in ("error", "skipped")]
+    running_models = [m for m in model_results if m["execution_time"] > 0]
+    slow_threshold = 2 * (sum(m["execution_time"] for m in running_models) / max(len(running_models), 1))
+    slow_models = [m["unique_id"] for m in running_models if m["execution_time"] > slow_threshold]
     total_exec = sum(m["execution_time"] for m in model_results)
 
-    if failed_models:
+    # Derive data quality output
+    passed = sum(1 for t in test_results if t["status"] == "pass")
+    failed_tests = sum(1 for t in test_results if t["status"] in ("fail", "error"))
+    warned = sum(1 for t in test_results if t["status"] == "warn")
+    skipped_tests = sum(1 for t in test_results if t["status"] == "skipped")
+    total_tests = len(test_results)
+
+    # Pipeline status considers both model errors and test failures
+    if failed_models or failed_tests > 0:
         pm_status = "failed"
-    elif slow_models:
+    elif slow_models or warned > 0:
         pm_status = "degraded"
     else:
         pm_status = "healthy"
 
-    # Derive data quality output
-    passed = sum(1 for t in test_results if t["status"] == "pass")
-    failed = sum(1 for t in test_results if t["status"] in ("fail", "error"))
-    warned = sum(1 for t in test_results if t["status"] == "warn")
-    total_tests = len(test_results)
-
-    if failed > 0:
+    if failed_tests > 0:
         dq_status = "failing"
     elif warned > 0:
         dq_status = "warning"
     else:
         dq_status = "passing"
+
+    # If no active scenario but there are failures, label as quality_drift for demo
+    if scenario == "none" and (failed_tests > 0 or failed_models):
+        scenario = "quality_drift"
+
+    st.session_state.active_scenario = scenario
 
     failure_details = []
     for t in test_results:
@@ -344,13 +356,16 @@ def _build_demo_state() -> dict:
                 "failures": t.get("failures", 0),
             })
 
+    # Downstream models that were skipped due to failures
+    skipped_model_names = [m["unique_id"] for m in model_results if m["status"] == "skipped"]
+
     # Build a state dict matching DataIQState structure
     state = {
         "run_metadata": artifacts["run_metadata"],
         "model_results": model_results,
         "test_results": test_results,
         "scenario": scenario,
-        "completed_agents": ["pipeline_monitor", "data_quality"],
+        "completed_agents": ["pipeline_monitor", "data_quality", "root_cause", "impact_analysis"],
         "errors": [],
         "current_agent": "",
         "pipeline_monitor": {
@@ -360,33 +375,44 @@ def _build_demo_state() -> dict:
             "missing_runs": False,
             "total_models": len(model_results),
             "total_execution_time": total_exec,
-            "summary": f"Pipeline is {pm_status}. {len(failed_models)} failed, {len(slow_models)} slow.",
+            "summary": f"CRITICAL: Pipeline is {pm_status}. {len(failed_models)} failed/skipped models, "
+                       f"{failed_tests} test failures, {warned} warnings.",
             "claude_interpretation": "(Demo mode — agent interpretation not available)",
         },
         "data_quality": {
             "status": dq_status,
             "total_tests": total_tests,
             "passed_tests": passed,
-            "failed_tests": failed,
+            "failed_tests": failed_tests,
             "failure_details": failure_details,
             "column_issues": [],
-            "summary": f"{passed}/{total_tests} tests passing. {failed} failures, {warned} warnings.",
+            "summary": f"{passed}/{total_tests} tests passing. {failed_tests} failures, {warned} warnings.",
             "claude_interpretation": "(Demo mode — agent interpretation not available)",
         },
         "root_cause": {
-            "root_cause_type": scenario if scenario != "none" else "none",
-            "root_cause_model": failed_models[0] if failed_models else "",
-            "dependency_chain": [],
-            "evidence": [],
-            "summary": f"Scenario: {scenario}" if scenario != "none" else "No issues detected.",
+            "root_cause_type": scenario,
+            "root_cause_model": "model.dataiq.stg_taxi_trips",
+            "dependency_chain": ["model.dataiq.raw_taxi_trips", "model.dataiq.stg_taxi_trips"],
+            "evidence": [
+                "Test `accepted_range_stg_taxi_trips_fare_amount` failed with 30 rows outside range 0–500",
+                "Downstream models skipped due to test failure: " + ", ".join(
+                    _model_short_name(m) for m in skipped_model_names
+                ) if skipped_model_names else "Test failures detected in staging layer",
+            ],
+            "summary": f"Root cause: {scenario.replace('_', ' ')} detected in stg_taxi_trips.",
             "claude_interpretation": "(Demo mode — agent interpretation not available)",
         },
         "impact_analysis": {
-            "affected_models": [],
-            "affected_count": 0,
-            "downstream_impacts": [],
-            "stakeholder_impacts": [],
-            "summary": "(Demo mode — run full pipeline for impact analysis)",
+            "affected_models": skipped_model_names,
+            "affected_count": len(skipped_model_names),
+            "downstream_impacts": [
+                f"{_model_short_name(m)} — skipped due to upstream failure" for m in skipped_model_names
+            ],
+            "stakeholder_impacts": [
+                "Daily trip metrics dashboard will show stale data",
+                "Revenue reports may be inaccurate until fare_amount anomalies are resolved",
+            ] if skipped_model_names else [],
+            "summary": f"{len(skipped_model_names)} downstream models affected by upstream failures.",
             "claude_interpretation": "(Demo mode — agent interpretation not available)",
         },
         "report": {
@@ -770,9 +796,34 @@ def page_executive_report():
 # ═══════════════════════════════════════════════════════════════════════════
 # PAGE: Demo Scenarios
 # ═══════════════════════════════════════════════════════════════════════════
+def _is_cloud_environment() -> bool:
+    """Detect if running on Streamlit Cloud (read-only filesystem)."""
+    if os.environ.get("STREAMLIT_SHARING_MODE"):
+        return True
+    # Fallback: check if data/raw/ is writable
+    raw_dir = os.path.join(PROJECT_ROOT, "data", "raw")
+    test_file = os.path.join(raw_dir, ".write_test")
+    try:
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return False
+    except OSError:
+        return True
+
+
 def page_demo_scenarios():
     st.title("Demo Scenarios")
     st.caption("Simulate failure modes to test the agent pipeline")
+
+    is_cloud = _is_cloud_environment()
+
+    if is_cloud:
+        st.warning(
+            "**Live scenario simulation requires local deployment.** "
+            "On the cloud demo, use **Demo Mode** on the Pipeline Monitor page "
+            "to see pre-computed results."
+        )
 
     # Current scenario status
     current = _detect_scenario()
@@ -821,6 +872,8 @@ def page_demo_scenarios():
 
             if is_active:
                 st.button(f"✓ Active", key=f"btn_{key}", disabled=True, use_container_width=True)
+            elif is_cloud:
+                st.button(f"Activate {info['label']}", key=f"btn_{key}", disabled=True, use_container_width=True)
             else:
                 if st.button(f"Activate {info['label']}", key=f"btn_{key}", use_container_width=True):
                     with st.spinner(f"Simulating {info['label']}..."):
@@ -838,7 +891,9 @@ def page_demo_scenarios():
     st.divider()
 
     # Reset button
-    if st.button("🔄 Reset to Normal", type="primary", use_container_width=True):
+    if is_cloud:
+        st.button("🔄 Reset to Normal", type="primary", use_container_width=True, disabled=True)
+    elif st.button("🔄 Reset to Normal", type="primary", use_container_width=True):
         with st.spinner("Resetting all scenarios..."):
             stdout, stderr = _run_simulate("reset")
             st.session_state.active_scenario = "none"
